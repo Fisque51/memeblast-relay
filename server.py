@@ -1,10 +1,9 @@
 """
-MemeBlast Relay Server v2
-Gere les health checks HTTP de Render + WebSocket relay
+MemeBlast Relay Server v3
+Compatible websockets 12+ et Python 3.14
 """
 import asyncio, json, logging, os
 from collections import defaultdict
-from http import HTTPStatus
 import websockets
 from websockets.asyncio.server import serve, ServerConnection
 
@@ -20,7 +19,7 @@ rooms: dict[str, set[ServerConnection]] = defaultdict(set)
 async def handler(ws: ServerConnection):
     room = ws.request.path.strip("/") or "default"
     rooms[room].add(ws)
-    log.info(f"[+] room={room!r}  total={len(rooms[room])}")
+    log.info(f"[+] room={room!r}  clients={len(rooms[room])}")
     try:
         async for raw in ws:
             peers = rooms[room] - {ws}
@@ -37,15 +36,27 @@ async def handler(ws: ServerConnection):
         log.warning(f"handler: {e}")
     finally:
         rooms[room].discard(ws)
-        log.info(f"[-] room={room!r}  total={len(rooms[room])}")
+        log.info(f"[-] room={room!r}  clients={len(rooms[room])}")
         if not rooms[room]:
             del rooms[room]
 
-async def health_check(path, headers):
-    """Repond aux health checks HTTP de Render avec 200 OK."""
-    if headers.get("Upgrade", "").lower() != "websocket":
-        return HTTPStatus.OK, [("Content-Type", "text/plain")], b"MemeBlast relay OK\n"
-    return None  # laisser passer la connexion WebSocket normalement
+async def health_check(connection, request):
+    """
+    Health check pour Render.
+    Dans websockets 13+/Python 3.14, process_request recoit
+    (connection, request) et request.headers est un objet Headers.
+    """
+    upgrade = request.headers.get("Upgrade", "")
+    if upgrade.lower() != "websocket":
+        # Repondre 200 OK au health check HTTP
+        from websockets.http11 import Response
+        from http import HTTPStatus
+        return Response(HTTPStatus.OK, "OK",
+                       [("Content-Type", "text/plain"),
+                        ("Content-Length", "18")],
+                       b"MemeBlast relay OK")
+    # Laisser passer la connexion WebSocket
+    return None
 
 async def main():
     port = int(os.environ.get("PORT", 8765))
